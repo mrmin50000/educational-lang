@@ -133,4 +133,62 @@ class ConfigParser:
             d[key] = value
         return d
 
+    def parse(self) -> Union[Dict[str, Any], None]:
+        top_level = {}
+        while self.pos < len(self.tokens):
+            token = self.peek()
+            if not token:
+                break
+            if token[0] == 'IDENT':
+                ident = token[1]
+                self.consume('IDENT')
+                next_tok = self.peek()
+                if next_tok and next_tok[0] == 'EQUALS':
+                    self.consume('EQUALS')
+                    value = self.parse_value()
+                    if value is None:
+                        return None
+                    if ident in self.constants:
+                        line = self._get_line_number(token[2])
+                        self.errors.append(f"Constant '{ident}' redefined at line {line}")
+                    self.constants[ident] = value
+                    if self.peek() and self.peek()[0] == 'SEMICOLON':
+                        self.consume('SEMICOLON')
+                else:
+                    # Это ключ корневого словаря
+                    if not self.consume('COLON'):
+                        line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
+                        self.errors.append(f"Missing ':' after top-level key '{ident}' at line {line}")
+                        return None
+                    value = self.parse_value()
+                    if value is None:
+                        return None
+                    if not self.consume('SEMICOLON'):
+                        line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
+                        self.errors.append(f"Missing ';' after top-level value for '{ident}' at line {line}")
+                        return None
+                    top_level[ident] = value
+            else:
+                line = self._get_line_number(token[2])
+                self.errors.append(f"Unexpected token '{token[1]}' at top level at line {line}")
+                return None
+        return top_level
 
+def main():
+    input_text = sys.stdin.read()
+    parser = ConfigParser(input_text)
+    if parser.errors:
+        for err in parser.errors:
+            print(f"Error: {err}", file=sys.stderr)
+        sys.exit(1)
+
+    result = parser.parse()
+    if parser.errors:
+        for err in parser.errors:
+            print(f"Error: {err}", file=sys.stderr)
+        sys.exit(1)
+
+    json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+
+if __name__ == '__main__':
+    main()
