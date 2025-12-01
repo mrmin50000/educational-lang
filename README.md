@@ -1,3 +1,4 @@
+ВАРИАНТ 18
 ## Учебный конфигурационный парсер
 
 Инструмент командной строки для преобразования конфигураций на учебном языке в формат JSON.
@@ -99,6 +100,14 @@ server: { port: #(port); };
 ```text
 Error: Undefined constant 'port' used at line 3
 ```
+
+---
+## Вывод из примеров
+server_config.txt:
+<img width="960" height="268" alt="image" src="https://github.com/user-attachments/assets/f5da2e5c-05bb-4178-9c27-f34207f299b3" />
+game_config.txt:
+<img width="953" height="365" alt="image" src="https://github.com/user-attachments/assets/03ee0c93-1d8b-4cbf-a7f1-2b4bbb26218e" />
+
 
 ---
 
