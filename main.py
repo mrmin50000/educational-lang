@@ -98,4 +98,39 @@ class ConfigParser:
             self.errors.append(f"Unexpected token '{token[1]}' while parsing value at line {line}")
             return None
 
+    def parse_dict(self) -> Dict[str, Any]:
+        self.consume('LBRACE')
+        d = {}
+        while True:
+            token = self.peek()
+            if not token:
+                self.errors.append("Unexpected end of input while parsing dictionary")
+                break
+            if token[0] == 'RBRACE':
+                self.consume('RBRACE')
+                break
+            if token[0] != 'IDENT':
+                line = self._get_line_number(token[2])
+                self.errors.append(f"Expected identifier as dict key, got '{token[1]}' at line {line}")
+                return {}
+            key = token[1]
+            self.consume('IDENT')
+            if not self.consume('COLON'):
+                line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
+                self.errors.append(f"Missing ':' after key '{key}' at line {line}")
+                return {}
+            value = self.parse_value()
+            if value is None:
+                return {}
+            if not self.consume('SEMICOLON'):
+                line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
+                self.errors.append(f"Missing ';' after value for key '{key}' at line {line}")
+                return {}
+            if key in d:
+                line = self._get_line_number(token[2])
+                self.errors.append(f"Duplicate key '{key}' in dictionary at line {line}")
+                # Но продолжаем парсинг
+            d[key] = value
+        return d
+
 
