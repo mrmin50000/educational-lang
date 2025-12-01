@@ -1,0 +1,13 @@
+port = 8080
+max_workers = 8
+--[[
+asdsadas
+]]
+server: {
+    port: #(port);
+    workers: #(max_workers);
+    ssl: {
+        enabled: 1;
+        port: 443;
+    };
+};

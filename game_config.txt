@@ -1,0 +1,16 @@
+width = 1920;
+height = 1080;
+fullscreen = 1;
+
+graphics: {
+  resolution: {
+    w: #(width);
+    h: #(height);
+  };
+  fullscreen: #(fullscreen);
+  v_sync: 1;
+};
+audio: {
+  master_volume: 80;
+  effects: 70;
+};
