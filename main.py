@@ -1,193 +1,132 @@
 import sys
-import re
 import json
-from typing import Any, Dict, Union
+from typing import Any, Dict
+from lark import Lark, Transformer, v_args, UnexpectedInput, UnexpectedToken
+
+grammar = r"""
+    ?start: (constant_def | dict_entry)*
+
+    constant_def: IDENT "=" value ";"
+    dict_entry: IDENT ":" value ";"
+
+    ?value: dict
+          | number
+          | constant_ref
+
+    dict: "{" (dict_item ";")* "}"
+    dict_item: IDENT ":" value
+
+    constant_ref: "#" "(" IDENT ")"
+    number: SIGNED_INT
+
+    IDENT: /[a-z][a-z0-9_]*/
+    COMMENT: /--\[\[.*?\]\]/
+
+    %import common.SIGNED_INT
+    %import common.WS
+    %ignore WS
+    %ignore COMMENT
+"""
+
+class ConfigTransformer(Transformer):
+    def __init__(self):
+        super().__init__()
+        self.constants: Dict[str, Any] = {}
+        self.errors = []
+        self.defined_constants = set()
+    
+    def number(self, items):
+        return int(items[0])
+    
+    def IDENT(self, token):
+        return str(token)
+    
+    def dict_item(self, items):
+        key, value = items
+        return (key, value)
+    
+    @v_args(inline=True)
+    def dict(self, *items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                line = getattr(key, 'line', 'unknown')
+                self.errors.append(f"Duplicate key '{key}' in dictionary at line {line}")
+            result[key] = value
+        return result
+    
+    @v_args(inline=True)
+    def constant_ref(self, name):
+        if name not in self.constants:
+            line = getattr(name, 'line', 'unknown')
+            self.errors.append(f"Undefined constant '{name}' used at line {line}")
+            return None
+        return self.constants[name]
+    
+    @v_args(inline=True)
+    def constant_def(self, name, value):
+        if name in self.defined_constants:
+            line = getattr(name, 'line', 'unknown')
+            self.errors.append(f"Constant '{name}' redefined at line {line}")
+        else:
+            self.constants[name] = value
+            self.defined_constants.add(name)
+        return None
+    
+    @v_args(inline=True)
+    def dict_entry(self, key, value):
+        return (key, value)
+    
+    def start(self, items):
+        result = {}
+        for item in items:
+            if item is not None:
+                if isinstance(item, tuple):
+                    key, value = item
+                    result[key] = value
+        return result
 
 class ConfigParser:
     def __init__(self, text: str):
         self.text = text
-        self.tokens = self.tokenize(text)
-        self.pos = 0
-        self.constants: Dict[str, Any] = {}
+        self.parser = Lark(grammar, parser='lalr', propagate_positions=True)
+        self.transformer = ConfigTransformer()
         self.errors = []
-
-    def tokenize(self, text: str) -> list:
-        text = re.sub(r'--\[\[.*?\]\]', '', text, flags=re.DOTALL)
-
-        token_spec = [
-            ('NUMBER',   r'[+-]?([1-9][0-9]*|0)'),
-            ('IDENT',    r'[a-z][a-z0-9_]*'),
-            ('HASH',     r'#'),
-            ('LPAREN',   r'\('),
-            ('RPAREN',   r'\)'),
-            ('LBRACE',   r'\{'),
-            ('RBRACE',   r'\}'),
-            ('COLON',    r':'),
-            ('SEMICOLON', r';'),
-            ('EQUALS',   r'='),
-            ('SKIP',     r'[ \t\n\r]+'),
-            ('MISMATCH', r'.'),
-        ]
-        tok_regex = '|'.join(f'(?P<{pair[0]}>{pair[1]})' for pair in token_spec)
-        tokens = []
-        for mo in re.finditer(tok_regex, text, re.DOTALL):
-            kind = mo.lastgroup
-            value = mo.group()
-            if kind == 'SKIP':
-                continue
-            elif kind == 'MISMATCH':
-                line = text[:mo.start()].count('\n') + 1
-                self.errors.append(f"Unexpected character '{value}' at line {line}")
+    
+    def parse(self) -> Dict[str, Any]:
+        try:
+            tree = self.parser.parse(self.text)
+            result = self.transformer.transform(tree)
+            
+            self.errors = self.transformer.errors
+            
+            return result
+            
+        except UnexpectedInput as e:
+            if isinstance(e, UnexpectedToken):
+                expected = {t for t in e.expected if t.isupper()}
+                self.errors.append(
+                    f"Unexpected token '{e.token}' at line {e.line}, column {e.column}. "
+                    f"Expected one of: {', '.join(sorted(expected)) if expected else 'END OF INPUT'}"
+                )
             else:
-                tokens.append((kind, value, mo.start()))
-        return tokens
-
-    def peek(self):
-        if self.pos < len(self.tokens):
-            return self.tokens[self.pos]
-        return None
-
-    def consume(self, expected_kind: str):
-        token = self.peek()
-        if token and token[0] == expected_kind:
-            self.pos += 1
-            return token
-        else:
-            line = self._get_line_number(token[2]) if token else self._get_line_number(len(self.text))
-            self.errors.append(f"Expected token {expected_kind}, got {token[0] if token else 'EOF'} at line {line}")
-            return None
-
-    def _get_line_number(self, pos: int) -> int:
-        return self.text[:pos].count('\n') + 1
-
-    def parse_value(self) -> Any:
-        token = self.peek()
-        if not token:
-            self.errors.append("Unexpected end of input while parsing value")
-            return None
-
-        if token[0] == 'NUMBER':
-            self.consume('NUMBER')
-            return int(token[1])
-        elif token[0] == 'LBRACE':
-            return self.parse_dict()
-        elif token[0] == 'HASH':
-            self.consume('HASH')
-            if self.consume('LPAREN'):
-                ident_token = self.consume('IDENT')
-                if not ident_token:
-                    line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
-                    self.errors.append(f"Expected identifier inside #(...) at line {line}")
-                    return None
-                name = ident_token[1]
-                if name not in self.constants:
-                    line = self._get_line_number(ident_token[2])
-                    self.errors.append(f"Undefined constant '{name}' used at line {line}")
-                    return None
-                if not self.consume('RPAREN'):
-                    line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
-                    self.errors.append(f"Missing closing parenthesis in #(...) at line {line}")
-                    return None
-                return self.constants[name]
-            else:
-                line = self._get_line_number(token[2])
-                self.errors.append(f"Expected '(' after '#' at line {line}")
-                return None
-        else:
-            line = self._get_line_number(token[2])
-            self.errors.append(f"Unexpected token '{token[1]}' while parsing value at line {line}")
-            return None
-
-    def parse_dict(self) -> Dict[str, Any]:
-        self.consume('LBRACE')
-        d = {}
-        while True:
-            token = self.peek()
-            if not token:
-                self.errors.append("Unexpected end of input while parsing dictionary")
-                break
-            if token[0] == 'RBRACE':
-                self.consume('RBRACE')
-                break
-            if token[0] != 'IDENT':
-                line = self._get_line_number(token[2])
-                self.errors.append(f"Expected identifier as dict key, got '{token[1]}' at line {line}")
-                return {}
-            key = token[1]
-            self.consume('IDENT')
-            if not self.consume('COLON'):
-                line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
-                self.errors.append(f"Missing ':' after key '{key}' at line {line}")
-                return {}
-            value = self.parse_value()
-            if value is None:
-                return {}
-            if not self.consume('SEMICOLON'):
-                line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
-                self.errors.append(f"Missing ';' after value for key '{key}' at line {line}")
-                return {}
-            if key in d:
-                line = self._get_line_number(token[2])
-                self.errors.append(f"Duplicate key '{key}' in dictionary at line {line}")
-                # Но продолжаем парсинг
-            d[key] = value
-        return d
-
-    def parse(self) -> Union[Dict[str, Any], None]:
-        top_level = {}
-        while self.pos < len(self.tokens):
-            token = self.peek()
-            if not token:
-                break
-            if token[0] == 'IDENT':
-                ident = token[1]
-                self.consume('IDENT')
-                next_tok = self.peek()
-                if next_tok and next_tok[0] == 'EQUALS':
-                    self.consume('EQUALS')
-                    value = self.parse_value()
-                    if value is None:
-                        return None
-                    if ident in self.constants:
-                        line = self._get_line_number(token[2])
-                        self.errors.append(f"Constant '{ident}' redefined at line {line}")
-                    self.constants[ident] = value
-                    if self.peek() and self.peek()[0] == 'SEMICOLON':
-                        self.consume('SEMICOLON')
-                else:
-                    # Это ключ корневого словаря
-                    if not self.consume('COLON'):
-                        line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
-                        self.errors.append(f"Missing ':' after top-level key '{ident}' at line {line}")
-                        return None
-                    value = self.parse_value()
-                    if value is None:
-                        return None
-                    if not self.consume('SEMICOLON'):
-                        line = self._get_line_number(self.tokens[self.pos][2]) if self.pos < len(self.tokens) else len(self.text)
-                        self.errors.append(f"Missing ';' after top-level value for '{ident}' at line {line}")
-                        return None
-                    top_level[ident] = value
-            else:
-                line = self._get_line_number(token[2])
-                self.errors.append(f"Unexpected token '{token[1]}' at top level at line {line}")
-                return None
-        return top_level
+                self.errors.append(f"Parse error: {e}")
+            return {}
+        
+        except Exception as e:
+            self.errors.append(f"Unexpected error: {e}")
+            return {}
 
 def main():
     input_text = sys.stdin.read()
+    
     parser = ConfigParser(input_text)
-    if parser.errors:
-        for err in parser.errors:
-            print(f"Error: {err}", file=sys.stderr)
-        sys.exit(1)
-
     result = parser.parse()
+    
     if parser.errors:
         for err in parser.errors:
             print(f"Error: {err}", file=sys.stderr)
         sys.exit(1)
-
     json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
 
 if __name__ == '__main__':
