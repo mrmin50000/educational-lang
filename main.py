@@ -20,7 +20,7 @@ grammar = r"""
     number: SIGNED_INT
 
     IDENT: /[a-z][a-z0-9_]*/
-    COMMENT: /--\[\[.*?\]\]/
+    COMMENT: /--\[\[[\s\S]*?\]\]/
 
     %import common.SIGNED_INT
     %import common.WS
