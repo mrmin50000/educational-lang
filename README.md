@@ -8,6 +8,9 @@
 ## Quick start
 
 ```bash
+# Установка зависимостей
+pip install -r requirements.txt
+
 # Запуск с файлом
 python3 config_parser.py < config.txt
 
@@ -114,4 +117,4 @@ game_config.txt:
 ## Требования
 
 - **Python 3.6+**
-- Никаких внешних зависимостей — только стандартная библиотека
+- requirements.txt
